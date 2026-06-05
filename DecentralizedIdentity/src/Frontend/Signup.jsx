@@ -1,12 +1,13 @@
 import React, { useState } from "react";
-import { ethers, keccak256, toUtf8Bytes } from "ethers";
+import { keccak256, toUtf8Bytes } from "ethers";
 import { uploadJSON } from "../utils/ipfs";
-import { encryptData, deriveKeyFromWallet } from "../utils/crypto";
-import { getContract } from "../utils/contract";
-import useFaceRecognition from "../Frontend/hooks/useFaceRecognition";
+import { encryptWithWalletKey } from "../utils/crypto";
+import { getWalletConnection, getReadContract } from "../utils/contract";
+import useFaceRecognition from "./hooks/useFaceRecognition";
 
 export default function Signup() {
-  const { videoRef, startCamera, stopCamera, detectLiveness, captureFace } = useFaceRecognition();
+  const { videoRef, startCamera, stopCamera, detectLiveness, captureFace, modelReady } =
+    useFaceRecognition();
   const [status, setStatus] = useState("");
   const [form, setForm] = useState({ name: "", email: "" });
 
@@ -14,45 +15,36 @@ export default function Signup() {
 
   const handleSignup = async () => {
     try {
-      if (!window.ethereum) {
-        setStatus("❌ MetaMask not detected.");
-        return;
-      }
+      if (!window.ethereum) { setStatus("❌ MetaMask not detected."); return; }
+      if (!form.name || !form.email) { setStatus("⚠️ Please enter your name and email."); return; }
+      if (!modelReady) { setStatus("⏳ Face models still loading, please wait..."); return; }
 
-      if (!form.name || !form.email) {
-        setStatus("⚠️ Please enter your name and email first.");
-        return;
-      }
-
+      // Single wallet connection — uses cache if already connected
       setStatus("🔑 Connecting to wallet...");
-      await window.ethereum.request({ method: "eth_requestAccounts" });
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      const signer = await provider.getSigner();
-      const address = await signer.getAddress();
-      const contract = await getContract();
+      const { address, contract } = await getWalletConnection();
 
-      // ✅ Check if already registered
+      // Read-only check — no MetaMask popup
       setStatus("🔍 Checking existing registration...");
-      const alreadyRegistered = await contract.isRegistered(address);
+      const readContract = getReadContract();
+      const alreadyRegistered = await readContract.isRegistered(address);
       if (alreadyRegistered) {
-        setStatus("⚠️ User already registered. Please login instead.");
+        setStatus("⚠️ Already registered. Please login instead.");
         return;
       }
 
-      // 🎥 Start camera and detect liveness
+      // Camera + liveness
       setStatus("🎥 Starting camera...");
       await startCamera();
       await new Promise((r) => setTimeout(r, 1000));
 
-      setStatus("👁 Detecting liveness...");
-      const live = await detectLiveness({ timeout: 6000, interval: 150 });
+      setStatus("👁 Detecting liveness — please blink...");
+      const live = await detectLiveness({ timeout: 6000 });
       if (!live) {
         setStatus("❌ Liveness detection failed. Try again.");
         stopCamera();
         return;
       }
 
-      // 📸 Capture face
       setStatus("📸 Capturing face...");
       const descriptor = await captureFace();
       if (!descriptor) {
@@ -60,39 +52,31 @@ export default function Signup() {
         stopCamera();
         return;
       }
+      stopCamera();
 
-      // 🔐 Encrypt face data
-      setStatus("🔐 Deriving encryption key...");
-      const key = await deriveKeyFromWallet();
-
+      // Encrypt — encryptWithWalletKey reuses cached AES key (no extra popup)
+      setStatus("🔐 Encrypting face data...");
       const faceHash = keccak256(toUtf8Bytes(descriptor.join(",")));
-      const dataToEncrypt = {
+      const encrypted = await encryptWithWalletKey({
         faceDescriptor: Array.from(descriptor),
         walletAddress: address,
         name: form.name,
         email: form.email,
         faceHash,
         createdAt: new Date().toISOString(),
-      };
+      });
 
-      setStatus("🧩 Encrypting face data...");
-      const encrypted = await encryptData(key, dataToEncrypt);
-      if (!encrypted || !encrypted.ciphertext) {
+      if (!encrypted?.ciphertext) {
         setStatus("❌ Encryption failed.");
-        stopCamera();
         return;
       }
 
-      // 🛰 Upload encrypted data to IPFS
+      // IPFS upload
       setStatus("🛰 Uploading encrypted identity to IPFS...");
       const cid = await uploadJSON(encrypted);
-      if (!cid) {
-        setStatus("❌ IPFS upload failed.");
-        stopCamera();
-        return;
-      }
+      if (!cid) { setStatus("❌ IPFS upload failed."); return; }
 
-      // ⛓ Register user on blockchain
+      // On-chain registration — uses cached signer from getWalletConnection
       setStatus("⛓ Storing identity on blockchain...");
       const tx = await contract.registerUser(form.name, form.email, cid);
       await tx.wait();
