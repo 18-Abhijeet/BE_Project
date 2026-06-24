@@ -1,6 +1,4 @@
 import React, { useState, useEffect } from "react";
-// eslint-disable-next-line no-unused-vars
-import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import useFaceRecognition from "./hooks/useFaceRecognition";
 import { getWalletConnection, getReadContract } from "../utils/contract";
@@ -9,8 +7,8 @@ import { decryptWithWalletKey } from "../utils/crypto";
 import { recordLoginOnChain, flushLoginQueue } from "../utils/recordLoginOnChain";
 import { logAnomalyOnChain } from "../utils/logAnomalyOnChain";
 
-// Stricter than 0.6 — face-api recommends 0.5 to reduce false accepts
-const FACE_DISTANCE_THRESHOLD = 0.5;
+// Stricter than 0.7 — face-api recommends 0.6 to balance false accepts and false rejects
+const FACE_DISTANCE_THRESHOLD = 0.6;
 const MAX_ATTEMPTS = 3;
 
 const euclideanDistance = (a, b) =>
@@ -59,6 +57,7 @@ export default function Login() {
   const handleDetectFace = async () => {
     if (busy) return;
     setBusy(true);
+    setEmojiState("neutral");
 
     try {
       if (!account) return fail("❌ Wallet not connected", "No wallet");
@@ -96,13 +95,13 @@ export default function Login() {
       await startCamera();
       await new Promise((r) => setTimeout(r, 1200));
 
-      setStatus("👁 Please blink to confirm liveness...");
-      setSubStatus("Look at the camera and blink naturally");
-      const live = await detectLiveness({ timeout: 8000 });
+      setStatus("👁 Please blink or look naturally to confirm liveness...");
+      setSubStatus("Authenticating unique biometric signature");
+      const live = await detectLiveness({ timeout: 6000 });
       if (!live) {
         return fail(
           "❌ Liveness check failed",
-          "Liveness failed — no blink detected",
+          "Liveness failed — verification timeout",
           "Try again in good lighting with your face clearly visible."
         );
       }
@@ -138,7 +137,6 @@ export default function Login() {
       }
 
       // ── Security C: wallet embedded in IPFS must match the connected signer ─
-      // Prevents someone from pointing to another user's CID
       if (decrypted.walletAddress?.toLowerCase() !== account.toLowerCase()) {
         return fail(
           "❌ Identity-wallet binding failed",
@@ -207,97 +205,167 @@ export default function Login() {
     setBusy(false);
   };
 
-  const emojiMap = { neutral: "😐", happy: "😄", angry: "😠" };
-  const emojiVariants = {
-    neutral: { scale: 1 },
-    happy:   { scale: [1, 1.3, 1], transition: { duration: 0.5 } },
-    angry:   { rotate: [0, -12, 12, -8, 8, 0], transition: { duration: 0.7 } },
+  const renderScannerStatus = () => {
+    if (emojiState === "happy") {
+      return (
+        <div className="flex flex-col items-center justify-center p-3 text-emerald-400">
+          <span className="text-4xl animate-bounce">🔓</span>
+          <span className="text-xs uppercase tracking-widest text-emerald-400 font-bold mt-2">ACCESS GRANTED</span>
+        </div>
+      );
+    }
+    if (emojiState === "angry") {
+      return (
+        <div className="flex flex-col items-center justify-center p-3 text-red-500">
+          <span className="text-4xl animate-shake">🚫</span>
+          <span className="text-xs uppercase tracking-widest text-red-500 font-bold mt-2">ACCESS DENIED</span>
+        </div>
+      );
+    }
+    if (busy) {
+      return (
+        <div className="flex flex-col items-center justify-center p-3 text-cyan-400">
+          <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-cyan-400 mb-2"></div>
+          <span className="text-xs uppercase tracking-widest text-cyan-400 font-bold">ANALYZE BIOMETRIC</span>
+        </div>
+      );
+    }
+    return (
+      <div className="flex flex-col items-center justify-center p-3 text-indigo-400">
+        <span className="text-4xl animate-pulse">🔒</span>
+        <span className="text-xs uppercase tracking-widest text-indigo-400 font-bold mt-2">SECURE PORTAL</span>
+      </div>
+    );
+  };
+
+  const renderStatusCard = (statusText) => {
+    if (!statusText) return null;
+
+    let type = "loading";
+    let icon = "⚡";
+    let title = "System Update";
+
+    if (statusText.includes("✅")) {
+      type = "success";
+      icon = "🛡️";
+      title = "Verification Success";
+    } else if (statusText.includes("❌")) {
+      type = "error";
+      icon = "⚠️";
+      title = "Verification Failed";
+    } else if (statusText.includes("⚠️")) {
+      type = "warning";
+      icon = "🔔";
+      title = "System Alert";
+    } else if (statusText.includes("⏳") || statusText.includes("loading")) {
+      type = "loading";
+      icon = "🌀";
+      title = "Biometrics Scanner";
+    } else if (statusText.includes("🎥") || statusText.includes("👁") || statusText.includes("📸")) {
+      type = "loading";
+      icon = "📷";
+      title = "Analyzing Face";
+    } else if (statusText.includes("🔑") || statusText.includes("🔐")) {
+      type = "loading";
+      icon = "🔑";
+      title = "Decrypting Records";
+    } else if (statusText.includes("🔍")) {
+      type = "loading";
+      icon = "🔍";
+      title = "Registry Query";
+    } else if (statusText.includes("🛰") || statusText.includes("⛓")) {
+      type = "loading";
+      icon = "🔗";
+      title = "Blockchain Log";
+    }
+
+    const cleanMsg = statusText.replace(/[\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD00-\uDFFF]/g, '').trim();
+
+    return (
+      <div className={`cyber-status-card status-${type}`}>
+        <span className="status-icon">{icon}</span>
+        <div className="status-content">
+          <span className="status-title">{title}</span>
+          <span className="status-message">{cleanMsg}</span>
+          {subStatus && <span className="status-sub-message text-xs opacity-80 mt-1">{subStatus}</span>}
+        </div>
+      </div>
+    );
   };
 
   const locked = attempts >= MAX_ATTEMPTS && !faceReady;
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-purple-100 via-blue-50 to-green-100 p-6">
-      <h1 className="text-4xl font-bold mb-2 text-indigo-700">Secure Face Login 🔐</h1>
-      <p className="text-gray-500 mb-6 text-sm">Your face is your key — no password needed</p>
+    <>
+      <h1>Secure Login</h1>
+      <p className="subtitle">Authenticate securely via high-speed on-chain face recognition</p>
 
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted
-        width="480"
-        height="360"
-        className="rounded-2xl shadow-lg mb-4 border-4 border-indigo-300 bg-black"
-        style={{ maxWidth: "100%" }}
-      />
+      <div className="video-scanner-wrapper">
+        <div className="scan-line"></div>
+        <div className="scanner-corner corner-tl"></div>
+        <div className="scanner-corner corner-tr"></div>
+        <div className="scanner-corner corner-bl"></div>
+        <div className="scanner-corner corner-br"></div>
+        <div className="scanner-status-ring"></div>
+        <video ref={videoRef} autoPlay playsInline muted />
+      </div>
 
-      <motion.div
-        key={emojiState}
-        className="text-7xl mb-4 select-none"
-        variants={emojiVariants}
-        animate={emojiState}
-      >
-        {emojiMap[emojiState]}
-      </motion.div>
+      <div className="my-2 flex justify-center">
+        {renderScannerStatus()}
+      </div>
 
       {/* Attempt dots */}
       {attempts > 0 && !faceReady && (
-        <div className="flex items-center gap-1 mb-4">
+        <div className="attempt-dots">
           {Array.from({ length: MAX_ATTEMPTS }).map((_, i) => (
             <div
               key={i}
-              className={`w-3 h-3 rounded-full ${i < attempts ? "bg-red-500" : "bg-gray-300"}`}
+              className={`attempt-dot ${i < attempts ? "active" : ""}`}
             />
           ))}
-          <span className="text-xs text-gray-500 ml-2">{attempts}/{MAX_ATTEMPTS} attempts</span>
         </div>
       )}
 
       {/* Buttons */}
-      <div className="flex flex-wrap gap-3 justify-center">
+      <div className="flex flex-col gap-3 w-full">
         {!faceReady && !locked && (
           <button
             onClick={handleDetectFace}
             disabled={busy}
-            className="bg-indigo-600 text-white px-6 py-3 rounded-xl shadow hover:bg-indigo-700 transition-transform transform hover:scale-105 disabled:opacity-60 disabled:cursor-wait"
+            className="btn-cyber btn-cyan"
           >
-            {busy ? "Verifying..." : "Detect & Verify"}
+            {busy ? "Authenticating..." : "Detect & Verify"}
           </button>
         )}
 
         {faceReady && (
           <button
             onClick={() => navigate("/dashboard")}
-            className="bg-green-600 text-white px-6 py-3 rounded-xl animate-pulse shadow hover:bg-green-700"
+            className="btn-cyber btn-success text-center"
           >
             Continue to Dashboard ➡️
           </button>
         )}
 
         {locked && (
-          <>
+          <div className="flex gap-2 w-full">
             <button
               onClick={handleRetry}
-              className="bg-yellow-500 text-white px-6 py-3 rounded-xl shadow hover:bg-yellow-600"
+              className="btn-cyber btn-warning flex-1"
             >
-              Reset &amp; Retry
+              Retry Scan
             </button>
             <button
               onClick={() => navigate("/email-otp")}
-              className="bg-blue-600 text-white px-6 py-3 rounded-xl shadow hover:bg-blue-700"
+              className="btn-cyber btn-outline flex-1 text-center"
             >
-              Try Email OTP instead
+              Email OTP
             </button>
-          </>
+          </div>
         )}
       </div>
 
-      {/* Status */}
-      <div className="mt-5 text-center max-w-sm">
-        <p className="font-semibold text-gray-800">{status}</p>
-        {subStatus && <p className="text-sm text-gray-500 mt-1">{subStatus}</p>}
-      </div>
-    </div>
+      {renderStatusCard(status)}
+    </>
   );
 }

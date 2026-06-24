@@ -10,10 +10,13 @@ export default function Signup() {
     useFaceRecognition();
   const [status, setStatus] = useState("");
   const [form, setForm] = useState({ name: "", email: "" });
+  const [busy, setBusy] = useState(false);
 
   const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value });
 
   const handleSignup = async () => {
+    if (busy) return;
+    setBusy(true);
     try {
       if (!window.ethereum) { setStatus("❌ MetaMask not detected."); return; }
       if (!form.name || !form.email) { setStatus("⚠️ Please enter your name and email."); return; }
@@ -37,7 +40,7 @@ export default function Signup() {
       await startCamera();
       await new Promise((r) => setTimeout(r, 1000));
 
-      setStatus("👁 Detecting liveness — please blink...");
+      setStatus("👁 Detecting liveness — please blink or look naturally...");
       const live = await detectLiveness({ timeout: 6000 });
       if (!live) {
         setStatus("❌ Liveness detection failed. Try again.");
@@ -87,38 +90,113 @@ export default function Signup() {
       setStatus("❌ Error: " + err.message);
     } finally {
       stopCamera();
+      setBusy(false);
     }
   };
 
+  const renderStatusCard = (statusText) => {
+    if (!statusText) return null;
+
+    let type = "loading";
+    let icon = "⚡";
+    let title = "System Update";
+
+    if (statusText.includes("✅")) {
+      type = "success";
+      icon = "🛡️";
+      title = "Verification Success";
+    } else if (statusText.includes("❌")) {
+      type = "error";
+      icon = "⚠️";
+      title = "Verification Failed";
+    } else if (statusText.includes("⚠️")) {
+      type = "warning";
+      icon = "🔔";
+      title = "Input Warning";
+    } else if (statusText.includes("⏳") || statusText.includes("loading")) {
+      type = "loading";
+      icon = "🌀";
+      title = "Model Initialization";
+    } else if (statusText.includes("🎥") || statusText.includes("👁") || statusText.includes("📸")) {
+      type = "loading";
+      icon = "📷";
+      title = "Biometrics Scanner";
+    } else if (statusText.includes("🔑") || statusText.includes("🔐")) {
+      type = "loading";
+      icon = "🔑";
+      title = "Securing Identity";
+    } else if (statusText.includes("🔍")) {
+      type = "loading";
+      icon = "🔍";
+      title = "Checking Records";
+    } else if (statusText.includes("🛰") || statusText.includes("⛓")) {
+      type = "loading";
+      icon = "🔗";
+      title = "Blockchain Registry";
+    }
+
+    // Strip emoji for a cleaner text presentation
+    const cleanMsg = statusText.replace(/[\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD00-\uDFFF]/g, '').trim();
+
+    return (
+      <div className={`cyber-status-card status-${type}`}>
+        <span className="status-icon">{icon}</span>
+        <div className="status-content">
+          <span className="status-title">{title}</span>
+          <span className="status-message">{cleanMsg}</span>
+        </div>
+      </div>
+    );
+  };
+
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gray-100 p-6">
-      <h1 className="text-3xl font-bold mb-4 text-purple-700">Signup</h1>
+    <>
+      <h1>Create Identity</h1>
+      <p className="subtitle">Secure face-registration linked directly to the blockchain</p>
 
-      <video ref={videoRef} autoPlay muted className="w-80 h-60 border rounded mb-3 shadow-lg" />
+      <div className="video-scanner-wrapper">
+        <div className="scan-line"></div>
+        <div className="scanner-corner corner-tl"></div>
+        <div className="scanner-corner corner-tr"></div>
+        <div className="scanner-corner corner-bl"></div>
+        <div className="scanner-corner corner-br"></div>
+        <div className="scanner-status-ring"></div>
+        <video ref={videoRef} autoPlay playsInline muted />
+      </div>
 
-      <input
-        type="text"
-        name="name"
-        placeholder="Full Name"
-        onChange={handleChange}
-        className="border p-2 rounded mb-2 w-64"
-      />
-      <input
-        type="email"
-        name="email"
-        placeholder="Email"
-        onChange={handleChange}
-        className="border p-2 rounded mb-3 w-64"
-      />
+      <div className="cyber-input-group">
+        <input
+          type="text"
+          name="name"
+          placeholder="Full Name"
+          value={form.name}
+          onChange={handleChange}
+          className="cyber-input"
+          required
+        />
+      </div>
+
+      <div className="cyber-input-group">
+        <input
+          type="email"
+          name="email"
+          placeholder="Email Address"
+          value={form.email}
+          onChange={handleChange}
+          className="cyber-input"
+          required
+        />
+      </div>
 
       <button
         onClick={handleSignup}
-        className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded shadow-md transition"
+        disabled={busy}
+        className="btn-cyber"
       >
-        Register Identity
+        {busy ? "Registering..." : "Register Identity"}
       </button>
 
-      <p className="mt-3 text-sm font-semibold text-gray-800">{status}</p>
-    </div>
+      {renderStatusCard(status)}
+    </>
   );
 }
